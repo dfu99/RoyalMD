@@ -1,11 +1,14 @@
 # 👑 Welcome to the RoyalMD
+✨ Click on the image to watch the video in 4K: 
+[![Watch the video](https://img.youtube.com/vi/fwk0BlfbTHc/maxresdefault.jpg)](https://www.youtube.com/watch?v=fwk0BlfbTHc)
 
 ## QUICK RUN
-
+```bash
 python ./RoyalMD_beta.py ./test_systems/short_and_flexible.pdb
+```
 
 ## 🔭 Overview 
-**RoyalMD** is a lightweight, educational molecular dynamics pipeline built on **OpenMM**, designed to run protein simulations on portable hardware. It automates on the fly common MD setup steps: from PDB fixing to solvation, minimization, and production runs, using a single command-line interface. The current beta version allows running molecular dynamics of any molecular system composed of proteins, nucleic acids and their complexes.
+**RoyalMD** is a lightweight, educational molecular dynamics pipeline built on **OpenMM**, designed to run protein simulations on portable hardware. It automates on the fly common MD setup steps: from PDB fixing to solvation, minimization, and production runs, using a single command-line interface. The current beta version allows running molecular dynamics of any molecular system composed of proteins, nucleic acids and their complexes. It automatically detect your hardware platform and uses GPU if available.
 
 
 ## 👤 Author
@@ -39,7 +42,7 @@ conda install -c conda-forge "numpy<2.0" # <<< if you have any numpy-related err
 ## ⚜️ Ussage
 
 ```bash
-./RoyalMD_demo.py your_structure.pdb
+./RoyalMD_beta.py your_structure.pdb
 ```
 
 ## ⚙️ Configuration
