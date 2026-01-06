@@ -18,7 +18,7 @@
 - Python 3.12
 - OpenMM
 - pdbfixer
-- mdtraj (for saving trajecotries in NetCDF format)
+- mdtraj (for saving MD trajectories in the NetCDF format)
 
 ```bash
 conda create -n MDsims python=3.12
