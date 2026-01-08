@@ -49,7 +49,7 @@ python ./RoyalMD_beta.py ./test_systems/short_and_flexible.pdb
 python ./RoyalMD_beta.py ./test_systems/DNA_RNA_prot.pdb
 
 # Large System (500K atoms): Immunoglobulin (PDB: 1IGT):
-python ./RoyalMD_beta.py ./test_systems/DNA_RNA_prot.pdb
+python ./RoyalMD_beta.py ./test_systems/antibody.pdb
 ```
 
 ## ⚙️ Configuration
