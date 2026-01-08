@@ -2,7 +2,7 @@
 ✨ Click on the image to watch the video in 4K: 
 [![Watch the video](https://img.youtube.com/vi/fwk0BlfbTHc/maxresdefault.jpg)](https://www.youtube.com/watch?v=fwk0BlfbTHc)
 
-## QUICK RUN
+## 🧬 QUICK LAUNCH
 ```bash
 python ./RoyalMD_beta.py ./test_systems/short_and_flexible.pdb
 ```
