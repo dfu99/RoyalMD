@@ -4,7 +4,7 @@
 
 ## 🧬 QUICK LAUNCH
 ```bash
-python ./RoyalMD_beta.py ./test_systems/short_and_flexible.pdb
+python ./RoyalMD.py ./test_systems/short_and_flexible.pdb
 ```
 
 ## 🔭 Overview 
@@ -43,13 +43,13 @@ conda install -c conda-forge "numpy<2.0" # <<< if you have any numpy-related err
 
 ```bash
 # Short peptide devived from 3CL protease (PDB: 6LU7):
-python ./RoyalMD_beta.py ./test_systems/short_and_flexible.pdb
+python ./RoyalMD.py ./test_systems/short_and_flexible.pdb
 
 # Protein-Nucleic Acid complex (RNase H, PDB: 2QKB):
-python ./RoyalMD_beta.py ./test_systems/DNA_RNA_prot.pdb
+python ./RoyalMD.py ./test_systems/DNA_RNA_prot.pdb
 
 # Large System (500K atoms): Immunoglobulin (PDB: 1IGT):
-python ./RoyalMD_beta.py ./test_systems/antibody.pdb
+python ./RoyalMD.py ./test_systems/antibody.pdb
 ```
 
 ## ⚙️ Configuration
