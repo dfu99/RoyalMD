@@ -88,13 +88,13 @@ Customize these variables in the MAIN function of the script.
 ## 🌀 Supported force fields and water models
 
 ```bash
-Customize these variables in the MAIN function of the script.
+#Customize these variables in the MAIN function of the script.
   ff_map = {
-        'amber19': 'amber19-all.xml', # with OPC water
-        'amber14': 'amber14-all.xml', # with TIP3P water
+        'amber19': 'amber19-all.xml', # with OPC (4 point water model)
+        'amber14': 'amber14-all.xml', # with TIP3P (3 point water model)
         'amber99sb': 'amber99sb.xml', # with TIP3P water
         'amber99sbildn': 'amber99sbildn.xml', # with TIP3P water
         'amber03': 'amber03.xml', # with TIP3P water
-        'charmm36': 'charmm36.xml' # with "water" water ;-)
+        'charmm36': 'charmm36.xml' # with "water" (TIP3P water for CHARMM)
     }
 ```
