@@ -220,7 +220,7 @@ def solvate_system(protein_fixer, ff_protein, ff_water, ff_map, box_type, box_pa
     return modeller, forcefield
 
 # --- STEPS 3 - 5: MINIMIZE, EQUILIBRATE AND RUN ---
-def setup_and_run(modeller, forcefield, temperature, pressure, timestep, equil_time, production_time, report_interval, output_nc, log_freq):
+def setup_and_run(modeller, forcefield, temperature, pressure, timestep, equil_time, production_time, report_interval, output_nc, log_freq, pulling_config=None):
     print("--- Step 3: Setup & Minimize ⚡ ---")
 
     # Force conversion to numbers
@@ -275,6 +275,84 @@ def setup_and_run(modeller, forcefield, temperature, pressure, timestep, equil_t
             if is_na: na_count += 1
 
     system.addForce(restraint_force)
+
+    pull_head_force = None
+    pull_tail_force = None
+    pull_force_value = None
+
+    def _residue_number(residue):
+        try:
+            return int(residue.id)
+        except Exception:
+            return residue.index + 1
+
+    def _select_atoms_by_ranges(topology, ranges):
+        indices = []
+        for atom in topology.atoms():
+            chain_id = atom.residue.chain.id
+            resnum = _residue_number(atom.residue)
+            for sel_chain, sel_start, sel_end in ranges:
+                if chain_id == sel_chain and sel_start <= resnum <= sel_end:
+                    indices.append(atom.index)
+                    break
+        return indices
+
+    def _compute_com(atom_indices, positions_nm, system_obj):
+        total_mass = 0.0
+        com = Vec3(0.0, 0.0, 0.0)
+        for idx in atom_indices:
+            mass = system_obj.getParticleMass(idx).value_in_unit(dalton)
+            if mass <= 0.0:
+                continue
+            pos = positions_nm[idx]
+            com += Vec3(pos[0], pos[1], pos[2]) * mass
+            total_mass += mass
+        if total_mass == 0.0:
+            raise ValueError("Selected atoms have zero total mass.")
+        return com * (1.0 / total_mass)
+
+    if pulling_config and pulling_config.get("enabled"):
+        head_ranges = pulling_config.get("head_ranges", [])
+        tail_ranges = pulling_config.get("tail_ranges", [])
+        if not head_ranges or not tail_ranges:
+            raise ValueError("Pulling is enabled but head/tail ranges are empty.")
+
+        head_atoms = _select_atoms_by_ranges(modeller.topology, head_ranges)
+        tail_atoms = _select_atoms_by_ranges(modeller.topology, tail_ranges)
+        if not head_atoms or not tail_atoms:
+            raise ValueError("Pulling selection produced empty head/tail atom groups.")
+
+        head_com = _compute_com(head_atoms, positions_nm, system)
+        tail_com = _compute_com(tail_atoms, positions_nm, system)
+        direction = head_com - tail_com
+        norm = (direction[0]**2 + direction[1]**2 + direction[2]**2) ** 0.5
+        if norm == 0.0:
+            raise ValueError("Head/tail COMs are identical; cannot define pull direction.")
+
+        nx, ny, nz = direction[0] / norm, direction[1] / norm, direction[2] / norm
+        pull_force_value = (pulling_config.get("force_pn", 20.0) * piconewton).value_in_unit(
+            kilojoule_per_mole / nanometer
+        )
+
+        pull_head_force = CustomExternalForce("-f*(nx*x + ny*y + nz*z)")
+        pull_head_force.addGlobalParameter("f", 0.0)
+        pull_head_force.addGlobalParameter("nx", nx)
+        pull_head_force.addGlobalParameter("ny", ny)
+        pull_head_force.addGlobalParameter("nz", nz)
+        for idx in head_atoms:
+            pull_head_force.addParticle(idx, [])
+
+        pull_tail_force = CustomExternalForce("f*(nx*x + ny*y + nz*z)")
+        pull_tail_force.addGlobalParameter("f", 0.0)
+        pull_tail_force.addGlobalParameter("nx", nx)
+        pull_tail_force.addGlobalParameter("ny", ny)
+        pull_tail_force.addGlobalParameter("nz", nz)
+        for idx in tail_atoms:
+            pull_tail_force.addParticle(idx, [])
+
+        system.addForce(pull_head_force)
+        system.addForce(pull_tail_force)
+        print(f"🧲 Pulling enabled: head atoms={len(head_atoms)} tail atoms={len(tail_atoms)}")
     # Print the verification report
     print(f"🔒 Restraint Report:")
     print(f"   - Protein backbone: {prot_count}")
@@ -380,6 +458,8 @@ def setup_and_run(modeller, forcefield, temperature, pressure, timestep, equil_t
 
     # Turn off restraints for Production by setting force constant k to 0
     simulation.context.setParameter("k", 0.0)
+    if pull_head_force and pull_tail_force:
+        simulation.context.setParameter("f", pull_force_value)
     
     # Clear the equilibration reporter to start a fresh production file
     #simulation.reporters.pop()
@@ -473,6 +553,14 @@ def main():
     ff_protein = 'amber14' # NB: use amber14 with tip3p water
     ff_water = 'tip3p' # tip3p - with amber14/ amber99; opc - with amber19; water - with charmm36
     ligands_to_remove = ['SO4','HOH', 'EDO', 'LIH', 'LIG'] # .. add more from your PDBs
+    # pulling config (constant force along initial head->tail vector)
+    pulling_config = {
+        "enabled": False,
+        "force_pn": 20.0,  # 10-40 pN suggested
+        # integrin avb3 example ranges (adjust to your topology)
+        "head_ranges": [("A", 1, 500), ("B", 1, 500)],
+        "tail_ranges": [("A", 900, 962), ("B", 650, 692)],
+    }
     # NB: can be expanded with more force fields:
     ff_map = {
         'amber19': 'amber19-all.xml', # with OPC water
@@ -504,7 +592,8 @@ def main():
                   production_time, 
                   report_interval, 
                   output_nc, 
-                  log_freq)
+                  log_freq,
+                  pulling_config)
 
 if __name__ == "__main__":
     main()
