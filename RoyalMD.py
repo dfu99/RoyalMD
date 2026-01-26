@@ -555,7 +555,7 @@ def main():
     ligands_to_remove = ['SO4','HOH', 'EDO', 'LIH', 'LIG'] # .. add more from your PDBs
     # pulling config (constant force along initial head->tail vector)
     pulling_config = {
-        "enabled": False,
+        "enabled": True,
         "force_pn": 20.0,  # 10-40 pN suggested
         # integrin avb3 example ranges (adjust to your topology)
         "head_ranges": [("A", 1, 500), ("B", 1, 500)],
