@@ -580,10 +580,10 @@ def main():
     # pulling config (constant force along initial head->tail vector)
     pulling_config = {
         "enabled": True,
-        "force_pn": 20.0,  # 10-40 pN suggested
+        "force_pn": 2.0,  # 10-40 pN suggested
         # integrin avb3 example ranges (adjust to your topology)
-        "head_ranges": [("A", 1, 500), ("B", 1, 500)],
-        "tail_ranges": [("A", 900, 962), ("B", 650, 692)],
+        "head_ranges": [("A", 1, 435), ("B", 113, 352)],
+        "tail_ranges": [("A", 742, 962), ("B", 607, 692)],
     }
     # NB: can be expanded with more force fields:
     ff_map = {
