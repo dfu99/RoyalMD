@@ -13,6 +13,7 @@ import sys
 import glob
 import time
 import random
+import argparse
 from openmm.app import *
 from openmm import *
 from openmm.unit import *
@@ -71,13 +72,13 @@ def print_intro_banner(add_slogan_separator=True):
     print(RESET + "\n") # End the line after the loop
 
 # --- STEP 0.1: CLEAN OLD DATA ---
-def clean_old_files(target_pdb, activate: bool = False):
+def clean_old_files(target_pdb, output_dir, activate: bool = False):
     if not activate:
         return
     print(f"🧹Cleaning Old Data:")
     patterns = ["*.dcd", "*.nc", target_pdb, "*.cif", "ligand_param/*"]
     for pattern in patterns:
-        for file in glob.glob(pattern):
+        for file in glob.glob(os.path.join(output_dir, pattern)):
             try:
                 if os.path.isfile(file):
                     os.remove(file)
@@ -220,7 +221,7 @@ def solvate_system(protein_fixer, ff_protein, ff_water, ff_map, box_type, box_pa
     return modeller, forcefield
 
 # --- STEPS 3 - 5: MINIMIZE, EQUILIBRATE AND RUN ---
-def setup_and_run(modeller, forcefield, temperature, pressure, timestep, equil_time, production_time, report_interval, output_nc, log_freq, pulling_config=None):
+def setup_and_run(modeller, forcefield, temperature, pressure, timestep, equil_time, production_time, report_interval, output_nc, log_freq, output_paths, pulling_config=None):
     print("--- Step 3: Setup & Minimize ⚡ ---")
 
     # Force conversion to numbers
@@ -330,9 +331,11 @@ def setup_and_run(modeller, forcefield, temperature, pressure, timestep, equil_t
             raise ValueError("Head/tail COMs are identical; cannot define pull direction.")
 
         nx, ny, nz = direction[0] / norm, direction[1] / norm, direction[2] / norm
-        pull_force_value = (pulling_config.get("force_pn", 20.0) * piconewton).value_in_unit(
-            kilojoule_per_mole / nanometer
-        )
+        force_pn = pulling_config.get("force_pn", 20.0)
+        # Convert pN -> kJ/(mol*nm) using Avogadro scaling.
+        pull_force_value = (
+            force_pn * piconewton * nanometer * AVOGADRO_CONSTANT_NA / nanometer
+        ).value_in_unit(kilojoule_per_mole / nanometer)
 
         pull_head_force = CustomExternalForce("-f*(nx*x + ny*y + nz*z)")
         pull_head_force.addGlobalParameter("f", 0.0)
@@ -395,7 +398,7 @@ def setup_and_run(modeller, forcefield, temperature, pressure, timestep, equil_t
     min_state = simulation.context.getState(getPositions=True, enforcePeriodicBox=False)
     current_positions = min_state.getPositions()
     #print(f"DEBUG: Topology atoms: {simulation.topology.getNumAtoms()} | State atoms: {len(current_positions)}")
-    with open('minimized.cif', 'w') as f:
+    with open(output_paths["minimized_cif"], 'w') as f:
         PDBxFile.writeFile(simulation.topology, current_positions, f)
 
     # --- STEP 4: EQUILIBRATION (Chil Start) ---
@@ -416,9 +419,9 @@ def setup_and_run(modeller, forcefield, temperature, pressure, timestep, equil_t
     # Run NVT equilibration to stabilize temperature first
     try:
         from mdtraj.reporters import NetCDFReporter
-        simulation.reporters.append(NetCDFReporter('heating.nc', report_interval))
+        simulation.reporters.append(NetCDFReporter(output_paths["heating_nc"], report_interval))
     except:
-        simulation.reporters.append(DCDReporter('heating.dcd', report_interval))
+        simulation.reporters.append(DCDReporter(output_paths["heating_dcd"], report_interval))
     print(f"🌡️  Step 1/2: NVT equilibration ({nvt_time} ps):")
     print(f" 🔸 Heating system: T = {temperature:.1f}K ... ", end="", flush=True)
     simulation.step(nvt_steps)
@@ -434,9 +437,9 @@ def setup_and_run(modeller, forcefield, temperature, pressure, timestep, equil_t
 
     try:
         from mdtraj.reporters import NetCDFReporter
-        simulation.reporters.append(NetCDFReporter('equilibration.nc', report_interval))
+        simulation.reporters.append(NetCDFReporter(output_paths["equilibration_nc"], report_interval))
     except:
-        simulation.reporters.append(DCDReporter('equilibration.dcd', report_interval))
+        simulation.reporters.append(DCDReporter(output_paths["equilibration_dcd"], report_interval))
 
     # 3. GRADUATED EQUILIBRATION LOOP
     k_values = [k_max - (i * (k_max / (num_stages - 1))) for i in range(num_stages)]
@@ -453,7 +456,7 @@ def setup_and_run(modeller, forcefield, temperature, pressure, timestep, equil_t
     # --- DUMP EQUILIBRATED SNAPSHOT ---
     eq_state = simulation.context.getState(getPositions=True, enforcePeriodicBox=False)
     eq_positions = eq_state.getPositions()
-    with open('equilibrated.cif', 'w') as f:
+    with open(output_paths["equilibrated_cif"], 'w') as f:
         PDBxFile.writeFile(simulation.topology, eq_positions, f)
 
     # Turn off restraints for Production by setting force constant k to 0
@@ -471,7 +474,7 @@ def setup_and_run(modeller, forcefield, temperature, pressure, timestep, equil_t
         from mdtraj.reporters import NetCDFReporter
         simulation.reporters.append(NetCDFReporter(output_nc, report_interval))
     except:
-        simulation.reporters.append(DCDReporter('production.dcd', report_interval))
+        simulation.reporters.append(DCDReporter(output_paths["production_dcd"], report_interval))
 
     print(f"--- Step 5: Production Run 👑 ---")
     steps_per_percent = int(total_steps / 100)
@@ -526,16 +529,37 @@ def setup_and_run(modeller, forcefield, temperature, pressure, timestep, equil_t
     print(f"🌀Trajectory saved to: {output_nc}")
 
 # --- MAIN CONTROLLER ---
+def parse_args():
+    parser = argparse.ArgumentParser(description="RoyalMD: portable MD workflow.")
+    parser.add_argument("input_pdb", help="Input PDB file.")
+    parser.add_argument(
+        "--out-dir",
+        default=".",
+        help="Directory to write all outputs (default: current directory).",
+    )
+    return parser.parse_args()
+
+
 def main():
-    if len(sys.argv) < 2:
-        print("ERROR: No input PDB file provided.")
-        print("Usage: python royalMD.py perfetto.pdb")
-        sys.exit(1)
+    args = parse_args()
 
     # --- MAIN CONFIG ---
-    input_pdb = sys.argv[1]
-    pre_sim_pdb = 'solvated.pdb'
-    output_nc = 'production.nc'
+    input_pdb = args.input_pdb
+    output_dir = os.path.abspath(args.out_dir)
+    os.makedirs(output_dir, exist_ok=True)
+    output_paths = {
+        "solvated_pdb": os.path.join(output_dir, "solvated.pdb"),
+        "minimized_cif": os.path.join(output_dir, "minimized.cif"),
+        "equilibrated_cif": os.path.join(output_dir, "equilibrated.cif"),
+        "heating_nc": os.path.join(output_dir, "heating.nc"),
+        "heating_dcd": os.path.join(output_dir, "heating.dcd"),
+        "equilibration_nc": os.path.join(output_dir, "equilibration.nc"),
+        "equilibration_dcd": os.path.join(output_dir, "equilibration.dcd"),
+        "production_nc": os.path.join(output_dir, "production.nc"),
+        "production_dcd": os.path.join(output_dir, "production.dcd"),
+    }
+    pre_sim_pdb = output_paths["solvated_pdb"]
+    output_nc = output_paths["production_nc"]
     timestep = 0.002
     equil_time = 200 # 200ps of NPT equilibration (after 100ps of heating)
     production_time = 1000 # 1 ns of production
@@ -573,7 +597,7 @@ def main():
     # --- 👑 EXECUTION PIPELINE 👑 ---
     print_intro_banner()
     # 0.1: Clean old trajectories, coordinate filles
-    clean_old_files(pre_sim_pdb, activate=True)
+    clean_old_files(os.path.basename(pre_sim_pdb), output_dir, activate=True)
     
     # 1. Fix Protein (stipping out ligands)
     fixer = fix_protein_topology(input_pdb, env_pH, ligands_to_remove)
@@ -593,6 +617,7 @@ def main():
                   report_interval, 
                   output_nc, 
                   log_freq,
+                  output_paths,
                   pulling_config)
 
 if __name__ == "__main__":
