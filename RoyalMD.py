@@ -14,6 +14,8 @@ import glob
 import time
 import random
 import argparse
+import io
+from types import SimpleNamespace
 from openmm.app import *
 from openmm import *
 from openmm.unit import *
@@ -280,6 +282,7 @@ def setup_and_run(modeller, forcefield, temperature, pressure, timestep, equil_t
     pull_head_force = None
     pull_tail_force = None
     pull_force_value = None
+    pull_force_schedule = None
 
     def _residue_number(residue):
         try:
@@ -312,6 +315,11 @@ def setup_and_run(modeller, forcefield, temperature, pressure, timestep, equil_t
             raise ValueError("Selected atoms have zero total mass.")
         return com * (1.0 / total_mass)
 
+    def _convert_force_pn(force_pn):
+        return (
+            force_pn * piconewton * nanometer * AVOGADRO_CONSTANT_NA / nanometer
+        ).value_in_unit(kilojoule_per_mole / nanometer)
+
     if pulling_config and pulling_config.get("enabled"):
         head_ranges = pulling_config.get("head_ranges", [])
         tail_ranges = pulling_config.get("tail_ranges", [])
@@ -331,11 +339,19 @@ def setup_and_run(modeller, forcefield, temperature, pressure, timestep, equil_t
             raise ValueError("Head/tail COMs are identical; cannot define pull direction.")
 
         nx, ny, nz = direction[0] / norm, direction[1] / norm, direction[2] / norm
-        force_pn = pulling_config.get("force_pn", 20.0)
-        # Convert pN -> kJ/(mol*nm) using Avogadro scaling.
-        pull_force_value = (
-            force_pn * piconewton * nanometer * AVOGADRO_CONSTANT_NA / nanometer
-        ).value_in_unit(kilojoule_per_mole / nanometer)
+        force_mode = pulling_config.get("force_mode", "constant")
+        if force_mode == "schedule":
+            schedule_pn = pulling_config.get("force_schedule") or {}
+            if 0 not in schedule_pn:
+                raise ValueError("Pulling schedule must include step 0.")
+            pull_force_schedule = [
+                (step, _convert_force_pn(force_pn))
+                for step, force_pn in sorted(schedule_pn.items())
+            ]
+        else:
+            force_pn = pulling_config.get("force_pn", 20.0)
+            # Convert pN -> kJ/(mol*nm) using Avogadro scaling.
+            pull_force_value = _convert_force_pn(force_pn)
 
         pull_head_force = CustomExternalForce("-f*(nx*x + ny*y + nz*z)")
         pull_head_force.addGlobalParameter("f", 0.0)
@@ -355,7 +371,14 @@ def setup_and_run(modeller, forcefield, temperature, pressure, timestep, equil_t
 
         system.addForce(pull_head_force)
         system.addForce(pull_tail_force)
-        print(f"🧲 Pulling enabled: head atoms={len(head_atoms)} tail atoms={len(tail_atoms)}")
+        if pull_force_schedule:
+            schedule_steps = ", ".join(str(step) for step, _ in pull_force_schedule)
+            print(
+                f"🧲 Pulling enabled (schedule): head atoms={len(head_atoms)} "
+                f"tail atoms={len(tail_atoms)} steps=[{schedule_steps}]"
+            )
+        else:
+            print(f"🧲 Pulling enabled: head atoms={len(head_atoms)} tail atoms={len(tail_atoms)}")
     # Print the verification report
     print(f"🔒 Restraint Report:")
     print(f"   - Protein backbone: {prot_count}")
@@ -462,7 +485,10 @@ def setup_and_run(modeller, forcefield, temperature, pressure, timestep, equil_t
     # Turn off restraints for Production by setting force constant k to 0
     simulation.context.setParameter("k", 0.0)
     if pull_head_force and pull_tail_force:
-        simulation.context.setParameter("f", pull_force_value)
+        if pull_force_schedule:
+            simulation.context.setParameter("f", pull_force_schedule[0][1])
+        else:
+            simulation.context.setParameter("f", pull_force_value)
     
     # Clear the equilibration reporter to start a fresh production file
     #simulation.reporters.pop()
@@ -486,8 +512,31 @@ def setup_and_run(modeller, forcefield, temperature, pressure, timestep, equil_t
     production_start = time.time()
     last_time = time.time()
 
+    production_step_offset = simulation.currentStep
+    schedule_index = 1 if pull_force_schedule and len(pull_force_schedule) > 1 else 0
+    next_schedule_step = None
+    if pull_force_schedule and schedule_index < len(pull_force_schedule):
+        next_schedule_step = production_step_offset + pull_force_schedule[schedule_index][0]
+
     for i in range(1, 101):
-            simulation.step(steps_per_percent)
+            target_step = production_step_offset + (i * steps_per_percent)
+            while simulation.currentStep < target_step:
+                if next_schedule_step is not None and next_schedule_step <= target_step:
+                    delta = next_schedule_step - simulation.currentStep
+                    if delta > 0:
+                        simulation.step(delta)
+                    simulation.context.setParameter("f", pull_force_schedule[schedule_index][1])
+                    schedule_index += 1
+                    if schedule_index < len(pull_force_schedule):
+                        next_schedule_step = (
+                            production_step_offset + pull_force_schedule[schedule_index][0]
+                        )
+                    else:
+                        next_schedule_step = None
+                else:
+                    delta = target_step - simulation.currentStep
+                    if delta > 0:
+                        simulation.step(delta)
             
             if i % log_freq == 0:
                 # FIX:
@@ -537,6 +586,43 @@ def parse_args():
         default=".",
         help="Directory to write all outputs (default: current directory).",
     )
+    parser.add_argument(
+        "--skip-fixer",
+        action="store_true",
+        help="Skip PDBFixer cleanup and use the input PDB as-is.",
+    )
+    parser.add_argument(
+        "--keep-ter",
+        action="store_true",
+        help="Preserve TER records when --skip-fixer is used.",
+    )
+    parser.add_argument(
+        "--pulling-enabled",
+        dest="pulling_enabled",
+        action="store_true",
+        help="Enable constant pulling force (default: enabled).",
+    )
+    parser.add_argument(
+        "--no-pulling",
+        dest="pulling_enabled",
+        action="store_false",
+        help="Disable constant pulling force.",
+    )
+    parser.set_defaults(pulling_enabled=True)
+    parser.add_argument(
+        "--pulling-force-pn",
+        default="2.0",
+        help=(
+            "Pulling force in pN. For constant mode use a number (default: 2.0). "
+            "For schedule mode use step:force pairs, e.g. '0:2,10:0'."
+        ),
+    )
+    parser.add_argument(
+        "--pulling-force-mode",
+        choices=["constant", "schedule"],
+        default="constant",
+        help="Pulling force mode: constant or schedule (default: constant).",
+    )
     return parser.parse_args()
 
 
@@ -578,9 +664,38 @@ def main():
     ff_water = 'tip3p' # tip3p - with amber14/ amber99; opc - with amber19; water - with charmm36
     ligands_to_remove = ['SO4','HOH', 'EDO', 'LIH', 'LIG'] # .. add more from your PDBs
     # pulling config (constant force along initial head->tail vector)
+    def _parse_pulling_schedule(raw_value):
+        schedule = {}
+        for part in str(raw_value).split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if ":" not in part:
+                raise ValueError("Schedule entries must be step:force, e.g. 0:2,10:0.")
+            step_str, force_str = part.split(":", 1)
+            step = int(step_str.strip())
+            if step < 0:
+                raise ValueError("Schedule steps must be >= 0.")
+            force = float(force_str.strip())
+            schedule[step] = force
+        if not schedule:
+            raise ValueError("Schedule is empty. Provide at least one step:force entry.")
+        if 0 not in schedule:
+            raise ValueError("Schedule must include step 0.")
+        return schedule
+
+    if args.pulling_force_mode == "constant":
+        pulling_force_pn = float(args.pulling_force_pn)
+        pulling_force_schedule = None
+    else:
+        pulling_force_pn = None
+        pulling_force_schedule = _parse_pulling_schedule(args.pulling_force_pn)
+
     pulling_config = {
-        "enabled": True,
-        "force_pn": 2.0,  # 10-40 pN suggested
+        "enabled": args.pulling_enabled,
+        "force_mode": args.pulling_force_mode,
+        "force_pn": pulling_force_pn,  # 10-40 pN suggested
+        "force_schedule": pulling_force_schedule,
         # integrin avb3 example ranges (adjust to your topology)
         "head_ranges": [("A", 1, 435), ("B", 113, 352)],
         "tail_ranges": [("A", 742, 962), ("B", 607, 692)],
@@ -600,7 +715,17 @@ def main():
     clean_old_files(os.path.basename(pre_sim_pdb), output_dir, activate=True)
     
     # 1. Fix Protein (stipping out ligands)
-    fixer = fix_protein_topology(input_pdb, env_pH, ligands_to_remove)
+    if args.skip_fixer:
+        print("⚠️ Skipping PDBFixer; using input PDB as-is.")
+        if args.keep_ter:
+            pdb = PDBFile(input_pdb)
+        else:
+            with open(input_pdb, "r") as f:
+                pdb_text = "".join(line for line in f if not line.startswith("TER"))
+            pdb = PDBFile(io.StringIO(pdb_text))
+        fixer = SimpleNamespace(topology=pdb.topology, positions=pdb.positions)
+    else:
+        fixer = fix_protein_topology(input_pdb, env_pH, ligands_to_remove)
     
     # 2: Solvate (Merging clean ligand inside)
     modeller, forcefield = solvate_system(fixer, ff_protein, ff_water, ff_map, 
