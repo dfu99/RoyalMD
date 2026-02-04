@@ -29,6 +29,15 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="End frame index (0-based, inclusive). Default: last frame.",
     )
+    parser.add_argument(
+        "--prefix",
+        type=str,
+        default=None,
+        help=(
+            "Output filename prefix. Default: input filename stem "
+            "(e.g., production_trajectory)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -54,7 +63,7 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     pad = len(str(end))
-    stem = pdb_path.stem
+    stem = pdb_path.stem if args.prefix is None else args.prefix
     for i in range(start, end + 1):
         frame = traj[i]
         out_path = out_dir / f"{stem}_frame_{i:0{pad}d}.pdb"
