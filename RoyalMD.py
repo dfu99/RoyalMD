@@ -89,7 +89,7 @@ def clean_old_files(target_pdb, output_dir, activate: bool = False):
                 pass
 
 # --- STEP 1: FIX PROTEIN STRUCTURE ---
-def fix_protein_topology(input_pdb, env_pH, ligands_to_remove):
+def fix_protein_topology(input_pdb, env_pH, ligands_to_remove, strip_hydrogens=True):
     print(f"--- Step 1: Cleaning Protein Topology ---")
     fixer = PDBFixer(filename=input_pdb)
 
@@ -110,7 +110,30 @@ def fix_protein_topology(input_pdb, env_pH, ligands_to_remove):
     else:
         print("✨ No blacklisted residues found to strip.")
 
-    # 2. Convert MSE to MET
+    # 2. Optionally strip hydrogens (will be re-added later by PDBFixer)
+    if strip_hydrogens:
+        def _is_hydrogen(atom):
+            if atom.element is not None and atom.element.symbol == 'H':
+                return True
+            name = atom.name.strip()
+            if not name:
+                return False
+            if name[0] == 'H':
+                return True
+            return len(name) > 1 and name[0].isdigit() and name[1] == 'H'
+
+        modeller = Modeller(fixer.topology, fixer.positions)
+        hydrogens = [atom for atom in modeller.topology.atoms() if _is_hydrogen(atom)]
+        if hydrogens:
+            modeller.delete(hydrogens)
+            fixer.topology = modeller.topology
+            fixer.positions = modeller.positions
+            fixer.missingResidues = {}
+            print(f"🧪 Stripped {len(hydrogens)} hydrogens (will be re-added).")
+        else:
+            print("✨ No hydrogens found to strip.")
+
+    # 3. Convert MSE to MET
     mse_count = 0
     cys_count = 0
     for residue in fixer.topology.residues():
@@ -131,7 +154,7 @@ def fix_protein_topology(input_pdb, env_pH, ligands_to_remove):
     if cys_count > 0:
         print(f"🧪 Standardized {cys_count} 'CYM/CYX' residues to 'CYS'.")
 
-    # 3. Analyze and Repair (Only on clean protein)
+    # 4. Analyze and Repair (Only on clean protein)
     fixer.findMissingResidues()
     # added 29/12: quick GAP diagnostics (currently shows only gaps in the last chain ;-))
     if fixer.missingResidues:
@@ -597,6 +620,11 @@ def parse_args():
         help="Preserve TER records when --skip-fixer is used.",
     )
     parser.add_argument(
+        "--keep-hydrogens",
+        action="store_true",
+        help="Do not strip input hydrogens before running PDBFixer.",
+    )
+    parser.add_argument(
         "--pulling-enabled",
         dest="pulling_enabled",
         action="store_true",
@@ -628,6 +656,7 @@ def parse_args():
 
 def main():
     args = parse_args()
+    strip_hydrogens = not args.keep_hydrogens
 
     # --- MAIN CONFIG ---
     input_pdb = args.input_pdb
@@ -717,6 +746,8 @@ def main():
     # 1. Fix Protein (stipping out ligands)
     if args.skip_fixer:
         print("⚠️ Skipping PDBFixer; using input PDB as-is.")
+        if strip_hydrogens:
+            print("⚠️ Hydrogens will be kept because PDBFixer is skipped.")
         if args.keep_ter:
             pdb = PDBFile(input_pdb)
         else:
@@ -725,7 +756,7 @@ def main():
             pdb = PDBFile(io.StringIO(pdb_text))
         fixer = SimpleNamespace(topology=pdb.topology, positions=pdb.positions)
     else:
-        fixer = fix_protein_topology(input_pdb, env_pH, ligands_to_remove)
+        fixer = fix_protein_topology(input_pdb, env_pH, ligands_to_remove, strip_hydrogens)
     
     # 2: Solvate (Merging clean ligand inside)
     modeller, forcefield = solvate_system(fixer, ff_protein, ff_water, ff_map, 
