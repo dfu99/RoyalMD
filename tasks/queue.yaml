@@ -1,0 +1,19 @@
+max_chain: 10
+queue:
+- objective: 'PACE TASK: Investigate why avb3 jobs keep failing (jobs 5054383, 5060532,
+    5073312 all failed in 2-4 min). Check the slurm output logs for error messages.
+    Fix the issue and resubmit. Also check if the MSA job (5073313) results need fetching.
+    Report findings and new job IDs via Slack.'
+  priority: 1
+  status: completed
+  added: 2026-03-23 03:08
+  source: pace-burn
+  started: 2026-03-23 03:09
+  completed: 2026-03-23 03:15
+  notes: "PACE AVB3 Job Investigation — 2026-03-23\n\nFINDINGS:\n- Jobs 5054383, 5060532,\
+    \ 5073312 all failed due to missing Python deps in venv_proteinttt\n  - 5054383:\
+    \ No module named 'requests' (Python 3.9 venv)\n  - 5060532: No module named 'tqdm'\
+    \ (Python 3.9 venv)\n  - 5073312: No module named 'openfold' (Python 3.12 venv,\
+    \ rebuilt but incomplete)\n- Root cause: submit script installs fair-esm but not\
+    \ openfold (required by ESMFold)\n- MSA job 5073313 completed successfully\n\n\
+    FIX:\n- Updated submit_proteinttt_slu"
